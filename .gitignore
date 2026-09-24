@@ -1,0 +1,27 @@
+# Python Virtual Environment
+venv/
+ENV/
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment Variables / Secrets
+.env
+.env.*
+
+# ChromaDB / Local Database
+chroma_db/
+
+# Node
+node_modules/
+dist/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
