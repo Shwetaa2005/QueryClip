@@ -1,3 +1,4 @@
+import os
 import re
 from youtube_transcript_api import YouTubeTranscriptApi
 
@@ -13,9 +14,24 @@ def extract_video_id(url:str)->str:
 #Extracts video_id from URL and fetches the raw transcript entries from YouTube.
 def fetch_raw_transcript(url:str) -> list[dict]:
     video_id = extract_video_id(url)
-    api = YouTubeTranscriptApi()
-    raw_transcript = api.fetch(video_id)
-    return raw_transcript
+    proxy_url = os.getenv("PROXY_URL")
+    proxies = None
+    if proxy_url:
+        proxies = {
+            "http": proxy_url,
+            "https": proxy_url
+        }
+
+    try:
+        # Pass proxies dictionary if available
+        if proxies:
+            raw_transcript = YouTubeTranscriptApi.get_transcript(video_id, proxies=proxies)
+        else:
+            raw_transcript = YouTubeTranscriptApi.get_transcript(video_id)
+
+        return raw_transcript
+    except Exception as e:
+        raise Exception(f"Failed to fetch YouTube transcript: {str(e)}")
 
 
 #Groups raw transcript items into ~300-word blocks while retaining start_time metadata.
