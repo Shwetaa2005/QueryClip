@@ -1,4 +1,5 @@
 import chromadb
+from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 
 class VectorStoreManager:
@@ -7,7 +8,10 @@ class VectorStoreManager:
         Initializes persistent local ChromaDB storage and the embedding model.
         """
         # 1. Initialize persistent local database client (saves to ./chroma_db folder)
-        self.client = chromadb.PersistentClient(path="./chroma_db")
+        self.client = chromadb.PersistentClient(
+            path="./chroma_db",
+            settings=Settings(anonymized_telemetry=False)
+        )
         
         # 2. Load open-source sentence transformer model for generating embeddings
         self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
