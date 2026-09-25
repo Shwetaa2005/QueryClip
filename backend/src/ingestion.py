@@ -1,6 +1,7 @@
 import os
 import re
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import GenericProxyConfig
 
 #Extracts the 11 character video ID from various youtube link formats
 def extract_video_id(url:str)->str:
@@ -12,24 +13,27 @@ def extract_video_id(url:str)->str:
 
 
 #Extracts video_id from URL and fetches the raw transcript entries from YouTube.
-def fetch_raw_transcript(url:str) -> list[dict]:
+def fetch_raw_transcript(url: str) -> list:
+    """
+    Fetches raw transcript objects using video ID, with proxy support for cloud deployments.
+    """
     video_id = extract_video_id(url)
     proxy_url = os.getenv("PROXY_URL")
-    proxies = None
-    if proxy_url:
-        proxies = {
-            "http": proxy_url,
-            "https": proxy_url
-        }
-    api = YouTubeTranscriptApi()
-    try:
-        # Pass proxies dictionary if available
-        if proxies:
-            raw_transcript = api.fetch(video_id, proxies=proxies)
-        else:
-            raw_transcript = api.fetch(video_id)
 
+    try:
+        # If PROXY_URL is set on Render, configure GenericProxyConfig
+        if proxy_url:
+            proxy_config = GenericProxyConfig(
+                http_url=proxy_url,
+                https_url=proxy_url
+            )
+            api = YouTubeTranscriptApi(proxy_config=proxy_config)
+        else:
+            api = YouTubeTranscriptApi()
+
+        raw_transcript = api.fetch(video_id)
         return raw_transcript
+
     except Exception as e:
         raise Exception(f"Failed to fetch YouTube transcript: {str(e)}")
 
