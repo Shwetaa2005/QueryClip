@@ -1,20 +1,21 @@
 import chromadb
 from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 
 class VectorStoreManager:
     def __init__(self, collection_name: str = "queryclip_videos"):
         """
-        Initializes persistent local ChromaDB storage and the embedding model.
+        Initializes persistent local ChromaDB storage and the lightweight FastEmbed model.
         """
         # 1. Initialize persistent local database client (saves to ./chroma_db folder)
+        # Telemetry is disabled to save additional RAM
         self.client = chromadb.PersistentClient(
             path="./chroma_db",
             settings=Settings(anonymized_telemetry=False)
         )
         
-        # 2. Load open-source sentence transformer model for generating embeddings
-        self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+        # 2. Load lightweight FastEmbed model (ONNX runtime, ~100MB footprint)
+        self.embedding_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
         
         # 3. Create or get an existing ChromaDB collection
         self.collection = self.client.get_or_create_collection(name=collection_name)
@@ -33,9 +34,9 @@ class VectorStoreManager:
         # 3. Create unique string IDs for each chunk (e.g., "videoID_startTime")
         ids = [f"{c['metadata']['video_id']}_{c['metadata']['start_time']}" for c in chunks]
         
-        # 4. Generate vector embeddings using self.embedding_model.encode()
-        # Note: Convert numpy output to python list using .tolist()
-        embeddings = self.embedding_model.encode(documents).tolist()
+        # 4. Generate vector embeddings using FastEmbed
+        # FastEmbed returns a generator of numpy arrays; convert each to a python list
+        embeddings = [e.tolist() for e in list(self.embedding_model.embed(documents))]
         
         # 5. Add documents, embeddings, metadatas, and ids to self.collection
         self.collection.add(
@@ -51,8 +52,8 @@ class VectorStoreManager:
         Converts user query to a vector, searches ChromaDB with a video_id filter,
         and returns top_k matching chunks with metadata.
         """
-        # 1. Convert user_query into a vector embedding
-        query_embedding = self.embedding_model.encode([user_query]).tolist()
+        # 1. Convert user_query into a vector embedding using FastEmbed
+        query_embedding = [e.tolist() for e in list(self.embedding_model.embed([user_query]))]
 
         # 2. Query ChromaDB collection with metadata filtering
         results = self.collection.query(
@@ -72,7 +73,8 @@ class VectorStoreManager:
                 })
 
         return retrieved_chunks
-    
+
+
 if __name__ == "__main__":
     from backend.src.ingestion import fetch_and_process_video, extract_video_id
 
