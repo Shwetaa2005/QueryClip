@@ -21,13 +21,13 @@ def fetch_raw_transcript(url:str) -> list[dict]:
             "http": proxy_url,
             "https": proxy_url
         }
-
+    api = YouTubeTranscriptApi()
     try:
         # Pass proxies dictionary if available
         if proxies:
-            raw_transcript = YouTubeTranscriptApi.get_transcript(video_id, proxies=proxies)
+            raw_transcript = api.fetch(video_id, proxies=proxies)
         else:
-            raw_transcript = YouTubeTranscriptApi.get_transcript(video_id)
+            raw_transcript = api.fetch(video_id)
 
         return raw_transcript
     except Exception as e:
