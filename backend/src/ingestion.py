@@ -2,6 +2,7 @@ import os
 import re
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.proxies import GenericProxyConfig
+from youtube_transcript_api.proxies import WebshareProxyConfig, GenericProxyConfig
 
 #Extracts the 11 character video ID from various youtube link formats
 def extract_video_id(url:str)->str:
@@ -14,18 +15,16 @@ def extract_video_id(url:str)->str:
 
 #Extracts video_id from URL and fetches the raw transcript entries from YouTube.
 def fetch_raw_transcript(url: str) -> list:
-    """
-    Fetches raw transcript objects using video ID, with proxy support for cloud deployments.
-    """
     video_id = extract_video_id(url)
-    proxy_url = os.getenv("PROXY_URL")
+    ws_user = os.getenv("WEBSHARE_USER")
+    ws_pass = os.getenv("WEBSHARE_PASS")
 
     try:
-        # If PROXY_URL is set on Render, configure GenericProxyConfig
-        if proxy_url:
-            proxy_config = GenericProxyConfig(
-                http_url=proxy_url,
-                https_url=proxy_url
+        # Use native WebshareProxyConfig if credentials exist
+        if ws_user and ws_pass:
+            proxy_config = WebshareProxyConfig(
+                proxy_username=ws_user,
+                proxy_password=ws_pass
             )
             api = YouTubeTranscriptApi(proxy_config=proxy_config)
         else:
