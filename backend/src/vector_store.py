@@ -34,7 +34,7 @@ class VectorStoreManager:
         embeddings = self.embedding_model.encode(documents).tolist()
         
         # 5. Add documents, embeddings, metadatas, and ids to self.collection
-        self.collection.add(
+        self.collection.upsert(
             documents=documents,
             embeddings=embeddings,
             metadatas=metadatas,

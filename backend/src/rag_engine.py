@@ -1,35 +1,58 @@
 import os
-from google import genai
+import time
+from fastapi import HTTPException
 from dotenv import load_dotenv
+from google import genai
+from google.genai import errors
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
 # Initialize Google GenAI Client
-# Automatically picks up GEMINI_API_KEY from environment variables
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+\
+MODELS = ["gemini-2.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"]
 
+def call_gemini(prompt: str) -> str:
+    last_error = None
+    
+    for model in MODELS:
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                )
+                return response.text
+            except errors.ServerError as e:  # 5xx errors
+                last_error = e
+                if attempt < 2:
+                    time.sleep(2 ** attempt)  # Waits 1s, 2s
+            except errors.ClientError as e:  # 4xx errors (bad model, quota, auth)
+                last_error = e
+                break  # Try the next model
+                
+    # If all retries and models fail, raise HTTP 503 or the last error
+    raise HTTPException(
+        status_code=503,
+        detail=f"The AI service is unavailable right now. Details: {last_error}"
+    )
 
 def format_timestamp_link(video_id: str, seconds: int) -> str:
-    """
-    Converts raw seconds into a formatted MM:SS string with an embedded YouTube link.
-    """
+    """Converts raw seconds into a formatted MM:SS string with an embedded YouTube link."""
     minutes = seconds // 60
     secs = seconds % 60
     url = f"https://www.youtube.com/watch?v={video_id}&t={seconds}s"
     timestamp_text = f"{minutes:02d}:{secs:02d}"
     return f"[{timestamp_text}]({url})"
 
-
 def generate_rag_response(query: str, context_chunks: list[dict], video_id: str) -> str:
-    """
-    Formats retrieved chunks with timestamp links and sends a grounded prompt to Gemini.
-    """
+    """Formats retrieved chunks with timestamp links and sends a grounded prompt to Gemini."""
     # 1. Format each retrieved chunk with its clickable timestamp link
     context_text = ""
     for chunk in context_chunks:
         link = format_timestamp_link(video_id, chunk["start_time"])
-        context_text += f"\n- Timestamp {link}: {chunk['text']}\n"
+        context_text += f"\nTimestamp {link}: {chunk['text']}\n"
 
     # 2. Build the strict grounding prompt
     prompt = f"""
@@ -51,13 +74,8 @@ User Question: {query}
 Answer:
 """
 
-    # 3. Call Gemini model using modern client syntax
-    response = client.models.generate_content(
-        model="gemini-3.6-flash",
-        contents=prompt,
-    )
-    return response.text
-
+    # 3. Call Gemini
+    return call_gemini(prompt)
 
 if __name__ == "__main__":
     from backend.src.ingestion import fetch_and_process_video, extract_video_id
