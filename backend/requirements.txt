@@ -1,8 +1,8 @@
-youtube-transcript-api
-sentence-transformers
-chromadb
-google-genai
-streamlit
-python-dotenv
 fastapi
 uvicorn
+python-dotenv
+google-genai
+youtube-transcript-api
+fastembed
+chromadb
+pydantic
