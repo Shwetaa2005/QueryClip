@@ -1,16 +1,20 @@
 import chromadb
-from sentence_transformers import SentenceTransformer
+from chromadb.config import Settings
+from fastembed import TextEmbedding
 
 class VectorStoreManager:
     def __init__(self, collection_name: str = "queryclip_videos"):
         """
-        Initializes persistent local ChromaDB storage and the embedding model.
+        Initializes persistent local ChromaDB storage and the lightweight FastEmbed model.
         """
         # 1. Initialize persistent local database client (saves to ./chroma_db folder)
-        self.client = chromadb.PersistentClient(path="./chroma_db")
+        self.client = chromadb.PersistentClient(
+            path="./chroma_db",
+            settings=Settings(anonymized_telemetry=False)
+        )
         
-        # 2. Load open-source sentence transformer model for generating embeddings
-        self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+        # 2. Load lightweight FastEmbed model (ONNX runtime, ~100MB footprint)
+        self.embedding_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
         
         # 3. Create or get an existing ChromaDB collection
         self.collection = self.client.get_or_create_collection(name=collection_name)
@@ -18,43 +22,50 @@ class VectorStoreManager:
 
     def add_chunks(self, chunks: list[dict]):
         """
-        Embeds transcript text chunks and stores them with metadata in ChromaDB.
+        Deletes existing chunks for the given video_id to avoid stale duplicates,
+        then adds fresh chunks with unique index-based IDs.
         """
-        # 1. Extract documents (texts) from chunks
+        if not chunks:
+            return
+
+        video_id = chunks[0]["metadata"]["video_id"]
+        
+        # 1. Clean up old records for this video before indexing new ones
+        try:
+            self.collection.delete(where={"video_id": video_id})
+        except Exception as e:
+            print(f"Notice: No prior records deleted for video {video_id}: {e}")
+
+        # 2. Extract documents, metadata, and format unique index-based IDs
         documents = [c["text"] for c in chunks]
-        
-        # 2. Extract metadata dictionaries from chunks
         metadatas = [c["metadata"] for c in chunks]
+        ids = [f"{video_id}_{i}" for i in range(len(chunks))]
         
-        # 3. Create unique string IDs for each chunk (e.g., "videoID_startTime")
-        ids = [f"{c['metadata']['video_id']}_{c['metadata']['start_time']}" for c in chunks]
-        
-        # 4. Generate vector embeddings using self.embedding_model.encode()
-        # Note: Convert numpy output to python list using .tolist()
-        embeddings = self.embedding_model.encode(documents).tolist()
-        
-        # 5. Add documents, embeddings, metadatas, and ids to self.collection
-        self.collection.upsert(
+        # 3. Generate embeddings using FastEmbed
+        embeddings = [e.tolist() for e in list(self.embedding_model.embed(documents))]
+
+        # 4. Add documents, embeddings, metadatas, and ids to collection
+        self.collection.add(
             documents=documents,
             embeddings=embeddings,
             metadatas=metadatas,
             ids=ids
         )
-        print(f"Successfully added {len(chunks)} chunks to ChromaDB!")
-    
+        print(f"Successfully indexed {len(chunks)} chunks for video '{video_id}' in ChromaDB!")
+
     def query(self, user_query: str, video_id: str, top_k: int = 3) -> list[dict]:
         """
-        Converts user query to a vector, searches ChromaDB with a video_id filter,
+        Converts user query to a vector using FastEmbed, searches ChromaDB with a video_id filter,
         and returns top_k matching chunks with metadata.
         """
-        # 1. Convert user_query into a vector embedding
-        query_embedding = self.embedding_model.encode([user_query]).tolist()
+        # 1. Convert user_query into a vector embedding using FastEmbed
+        query_embedding = [e.tolist() for e in list(self.embedding_model.embed([user_query]))]
 
         # 2. Query ChromaDB collection with metadata filtering
         results = self.collection.query(
             query_embeddings=query_embedding,
             n_results=top_k,
-            where={"video_id": video_id}  # Metadata filter!
+            where={"video_id": video_id}
         )
 
         # 3. Format returned results into a clean list of dictionaries
@@ -68,7 +79,8 @@ class VectorStoreManager:
                 })
 
         return retrieved_chunks
-    
+
+
 if __name__ == "__main__":
     from backend.src.ingestion import fetch_and_process_video, extract_video_id
 

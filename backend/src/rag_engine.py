@@ -1,19 +1,33 @@
 import os
 import time
-from fastapi import HTTPException
 from dotenv import load_dotenv
 from google import genai
-from google.genai import errors
+from google.genai import errors, types
 
-# Load environment variables
 load_dotenv()
 
-# Initialize Google GenAI Client
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-\
-MODELS = ["gemini-2.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"]
+api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    raise RuntimeError("GEMINI_API_KEY environment variable is missing in backend/.env.")
 
-def call_gemini(prompt: str) -> str:
+client = genai.Client(api_key=api_key)
+
+# Updated active Gemini models
+MODELS = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+
+def format_timestamp_link(video_id: str, seconds: int) -> str:
+    minutes = seconds // 60
+    secs = seconds % 60
+    url = f"https://www.youtube.com/watch?v={video_id}&t={seconds}s"
+    timestamp_text = f"{minutes:02d}:{secs:02d}"
+    return f"[{timestamp_text}]({url})"
+
+
+def call_gemini(prompt: str, system_instruction: str) -> str:
+    """
+    Calls Gemini model with AFC disabled to eliminate SDK warnings,
+    and handles automatic retries and fallback models cleanly.
+    """
     last_error = None
     
     for model in MODELS:
@@ -22,81 +36,61 @@ def call_gemini(prompt: str) -> str:
                 response = client.models.generate_content(
                     model=model,
                     contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=0.2,
+                        # Disable AFC to prevent SDK warnings on generate_content
+                        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
+                    )
                 )
-                return response.text
-            except errors.ServerError as e:  # 5xx errors
+
+                if response and response.text and response.text.strip():
+                    return response.text.strip()
+
+                last_error = Exception("Received empty response from Gemini API.")
+                time.sleep(1)
+
+            except errors.ServerError as e:
                 last_error = e
                 if attempt < 2:
-                    time.sleep(2 ** attempt)  # Waits 1s, 2s
-            except errors.ClientError as e:  # 4xx errors (bad model, quota, auth)
-                last_error = e
-                break  # Try the next model
-                
-    # If all retries and models fail, raise HTTP 503 or the last error
-    raise HTTPException(
-        status_code=503,
-        detail=f"The AI service is unavailable right now. Details: {last_error}"
-    )
+                    time.sleep(2 ** attempt)
 
-def format_timestamp_link(video_id: str, seconds: int) -> str:
-    """Converts raw seconds into a formatted MM:SS string with an embedded YouTube link."""
-    minutes = seconds // 60
-    secs = seconds % 60
-    url = f"https://www.youtube.com/watch?v={video_id}&t={seconds}s"
-    timestamp_text = f"{minutes:02d}:{secs:02d}"
-    return f"[{timestamp_text}]({url})"
+            except errors.ClientError as e:
+                # E.g. Quota exhausted or invalid key: log error and move to next model
+                last_error = e
+                print(f"ClientError with {model}: {e}")
+                break
+
+            except Exception as net_err:
+                last_error = net_err
+                if attempt < 2:
+                    time.sleep(1)
+
+    raise RuntimeError(f"Gemini API generation failed across all models. Cause: {last_error}")
+
 
 def generate_rag_response(query: str, context_chunks: list[dict], video_id: str) -> str:
-    """Formats retrieved chunks with timestamp links and sends a grounded prompt to Gemini."""
-    # 1. Format each retrieved chunk with its clickable timestamp link
+    if not query or not query.strip():
+        raise ValueError("Query cannot be empty.")
+        
+    if not context_chunks:
+        return "I couldn't find any relevant transcript snippets to answer your question."
+
     context_text = ""
     for chunk in context_chunks:
         link = format_timestamp_link(video_id, chunk["start_time"])
         context_text += f"\nTimestamp {link}: {chunk['text']}\n"
 
-    # 2. Build the strict grounding prompt
-    prompt = f"""
-You are QueryClip, an AI assistant answering questions about a YouTube video.
+    system_instruction = (
+        "You are QueryClip, an AI assistant answering questions about a YouTube video.\n"
+        "Use ONLY the provided transcript snippets to answer the question.\n\n"
+        "Rules:\n"
+        "1. Every time you state a fact from the video, you MUST include the EXACT Markdown timestamp link provided in the context snippets.\n"
+        "2. DO NOT write plain text timestamps like [00:00] or [05:34].\n"
+        "3. ALWAYS copy the EXACT markdown link format: [MM:SS](https://www.youtube.com/watch?v=...&t=Xs).\n"
+        "4. If the answer cannot be found in the context, state: 'I couldn't find information about this in the video.'"
+    )
 
-Use ONLY the provided transcript snippets to answer the question. 
+    prompt = f"Context Snippets:\n{context_text}\n\nUser Question: {query.strip()}"
 
-Rules:
-1. Every time you state a fact from the video, you MUST include the EXACT Markdown timestamp link provided in the context snippets.
-2. DO NOT write plain text timestamps like [00:00] or [05:34].
-3. ALWAYS copy the EXACT markdown link format: [MM:SS](https://www.youtube.com/watch?v={video_id}&t=Xs).
-4. If the answer cannot be found in the context, state: "I couldn't find information about this in the video."
-
-Context Snippets:
-{context_text}
-
-User Question: {query}
-
-Answer:
-"""
-
-    # 3. Call Gemini
-    return call_gemini(prompt)
-
-if __name__ == "__main__":
-    from backend.src.ingestion import fetch_and_process_video, extract_video_id
-    from backend.src.vector_store import VectorStoreManager
-
-    test_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-    v_id = extract_video_id(test_url)
-
-    print("1. Ingesting video...")
-    chunks = fetch_and_process_video(test_url)
-
-    print("2. Storing in ChromaDB...")
-    db_manager = VectorStoreManager()
-    db_manager.add_chunks(chunks)
-
-    print("3. Querying Vector DB...")
-    question = "What is the commitment mentioned in the video?"
-    retrieved = db_manager.query(question, video_id=v_id, top_k=2)
-
-    print("4. Generating RAG Answer from Gemini...\n")
-    answer = generate_rag_response(question, retrieved, v_id)
-    
-    print("=== FINAL RAG ANSWER ===")
-    print(answer)
+    return call_gemini(prompt, system_instruction)
